@@ -1,9 +1,10 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:friend_private/backend/http/api/messages.dart';
+import 'package:friend_private/backend/http/api/users.dart';
 import 'package:friend_private/backend/preferences.dart';
-import 'package:friend_private/backend/schema/message.dart';
 import 'package:friend_private/backend/schema/app.dart';
+import 'package:friend_private/backend/schema/message.dart';
 import 'package:friend_private/providers/app_provider.dart';
 
 class MessageProvider extends ChangeNotifier {
@@ -88,6 +89,12 @@ class MessageProvider extends ChangeNotifier {
     return messages;
   }
 
+  Future setMessageNps(ServerMessage message, int value) async {
+    await setMessageResponseRating(message.id, value);
+    message.askForNps = false;
+    notifyListeners();
+  }
+
   Future clearChat() async {
     setClearingChat(true);
     var mes = await clearChatServer();
@@ -128,5 +135,9 @@ class MessageProvider extends ChangeNotifier {
       SharedPreferencesUtil().selectedChatAppId = 'no_selected';
     }
     notifyListeners();
+  }
+
+  App? messageSenderApp(String? appId) {
+    return appProvider?.apps.firstWhereOrNull((p) => p.id == appId);
   }
 }

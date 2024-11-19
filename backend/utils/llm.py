@@ -1,3 +1,5 @@
+import json
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -7,6 +9,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import BaseModel, Field, ValidationError
 
+from database.redis_db import add_filter_category_item
+from models.app import App
 from models.chat import Message
 from models.facts import Fact
 from models.memory import Structured, MemoryPhoto, CategoryEnum, Memory
@@ -74,12 +78,12 @@ def should_discard_memory(transcript: str) -> bool:
 def get_transcript_structure(transcript: str, started_at: datetime, language_code: str, tz: str) -> Structured:
     prompt = ChatPromptTemplate.from_messages([(
         'system',
-        '''Your task is to provide structure and clarity to the recording transcription of a conversation.
+        '''You are an expert conversation analyzer. Your task is to analyze the conversation and provide structure and clarity to the recording transcription of a conversation.
         The conversation language is {language_code}. Use the same language {language_code} for your response.
         
         For the title, use the main topic of the conversation.
         For the overview, condense the conversation into a summary with the main topics discussed, make sure to capture the key points and important details from the conversation.
-        For the action items, include a list of commitments, specific tasks or actionable next steps from the conversation. Specify which speaker is responsible for each action item. 
+        For the action items, include a list of commitments, specific tasks or actionable steps from the conversation that the user is planning to do or has to do on that specific day or in future. Remember the speaker is busy so this has to be very efficient and concise, otherwise they might miss some critical tasks. Specify which speaker is responsible for each action item. 
         For the category, classify the conversation into one of the available categories.
         For Calendar Events, include a list of events extracted from the conversation, that the user must have on his calendar. For date context, this conversation happened on {started_at}. {tz} is the user's timezone, convert it to UTC and respond in UTC.
             
@@ -101,7 +105,6 @@ def get_transcript_structure(transcript: str, started_at: datetime, language_cod
         if event.duration > 180:
             event.duration = 180
         event.created = False
-
     return response
 
 
@@ -117,7 +120,6 @@ def get_plugin_result(transcript: str, plugin: Plugin) -> str:
 
     Conversation: ```{transcript.strip()}```,
 
-    Output your response in plain text, without markdown.
     Make sure to be concise and clear.
     '''
 
@@ -195,7 +197,7 @@ def generate_embedding(content: str) -> List[float]:
 # ****************************************
 # ************* CHAT BASICS **************
 # ****************************************
-def initial_chat_message(uid: str, plugin: Optional[Plugin] = None) -> str:
+def initial_chat_message(uid: str, plugin: Optional[App] = None) -> str:
     user_name, facts_str = get_prompt_facts(uid)
     if plugin is None:
         prompt = f'''
@@ -208,8 +210,6 @@ def initial_chat_message(uid: str, plugin: Optional[Plugin] = None) -> str:
 
         Send an initial message to start the conversation, make sure this message reflects your personality, \
         humor, and characteristics.
-
-        Output your response in plain text, without markdown.
         '''
     else:
         prompt = f'''
@@ -222,8 +222,6 @@ def initial_chat_message(uid: str, plugin: Optional[Plugin] = None) -> str:
 
         Send an initial message to start the conversation, make sure this message reflects your personality, \
         humor, and characteristics.
-
-        Output your response in plain text, without markdown.
         '''
     prompt = prompt.replace('    ', '').strip()
     return llm_mini.invoke(prompt).content
@@ -256,10 +254,39 @@ def requires_context(messages: List[Message]) -> bool:
     '''
     with_parser = llm_mini.with_structured_output(RequiresContext)
     response: RequiresContext = with_parser.invoke(prompt)
-    return response.value
+    try:
+        return response.value
+    except ValidationError:
+        return False
 
 
-# TODO: try query expansion
+class IsAnOmiQuestion(BaseModel):
+    value: bool = Field(description="If the message is an Omi/Friend related question")
+
+
+def retrieve_is_an_omi_question(messages: List[Message]) -> bool:
+    prompt = f'''
+    The user is using the chat functionality of an app known as Omi or Friend.
+    Based on the current conversation your task is to determine if the user is asking a question about the way you work, or how to use you or the app.
+    
+    Questions like, 
+    - "How does it work?"
+    - "What can you do?"
+    - "How can I buy it"
+    - "Where do I get it"
+    - "How the chat works?"
+    - ...
+    
+    Conversation History:    
+    {Message.get_messages_as_string(messages)}
+    '''.replace('    ', '').strip()
+    with_parser = llm_mini.with_structured_output(IsAnOmiQuestion)
+    response: IsAnOmiQuestion = with_parser.invoke(prompt)
+    try:
+        return response.value
+    except ValidationError:
+        return False
+
 
 def retrieve_context_topics(messages: List[Message]) -> List[str]:
     prompt = f'''
@@ -325,7 +352,7 @@ def chunk_extraction(segments: List[TranscriptSegment], topics: List[str]) -> st
     return response.summary
 
 
-def qa_rag(uid: str, context: str, messages: List[Message], plugin: Optional[Plugin] = None) -> str:
+def answer_simple_message(uid: str, messages: List[Message], plugin: Optional[Plugin] = None) -> str:
     conversation_history = Message.get_messages_as_string(
         messages, use_user_name_if_available=True, use_plugin_name_if_available=True
     )
@@ -336,17 +363,64 @@ def qa_rag(uid: str, context: str, messages: List[Message], plugin: Optional[Plu
         plugin_info = f"Your name is: {plugin.name}, and your personality/description is '{plugin.description}'.\nMake sure to reflect your personality in your response.\n"
 
     prompt = f"""
+    You are an assistant for engaging personal conversations. 
+    You are made for {user_name}, {facts_str}
+
+    Use what you know about {user_name}, to continue the conversation, feel free to ask questions, share stories, or just say hi.
+    {plugin_info}
+
+    Conversation History:
+    {conversation_history}
+
+    Answer:
+    """.replace('    ', '').strip()
+    print(prompt)
+    return llm_mini.invoke(prompt).content
+
+
+def answer_omi_question(messages: List[Message], context: str) -> str:
+    conversation_history = Message.get_messages_as_string(
+        messages, use_user_name_if_available=True, use_plugin_name_if_available=True
+    )
+
+    prompt = f"""
+    You are an assistant for answering questions about the app Omi, also known as Friend.
+    Continue the conversation, answering the question based on the context provided.
+    
+    Context:
+    ```
+    {context}
+    ```
+
+    Conversation History:
+    {conversation_history}
+
+    Answer:
+    """.replace('    ', '').strip()
+    return llm_mini.invoke(prompt).content
+
+
+def qa_rag(uid: str, question: str, context: str, plugin: Optional[Plugin] = None) -> str:
+    user_name, facts_str = get_prompt_facts(uid)
+
+    plugin_info = ""
+    if plugin:
+        plugin_info = f"Your name is: {plugin.name}, and your personality/description is '{plugin.description}'.\nMake sure to reflect your personality in your response.\n"
+
+    prompt = f"""
     You are an assistant for question-answering tasks. 
     You are made for {user_name}, {facts_str}
     
-    Use what you know about {user_name}, the following pieces of retrieved context and the chat history to continue the chat.
-    If you don't know the answer, just say that there's no available information about it. Use three sentences maximum and keep the answer concise.
-    If the message doesn't require context, it will be empty, so follow-up the conversation casually.
-    If there's not enough information to provide a valuable answer, ask the user for clarification questions.
+    Use what you know about {user_name}, the following pieces of retrieved context to answer the user question.
+    If there's no context or the context is not related, tell the user that they didn't record any conversations about that specific topic.
+    Never say that you don't have enough information. 
+    
+    Use three sentences maximum and keep the answer concise.
+    
     {plugin_info}
     
-    Chat History:
-    {conversation_history}
+    Question:
+    {question}
 
     Context:
     ```
@@ -354,7 +428,7 @@ def qa_rag(uid: str, context: str, messages: List[Message], plugin: Optional[Plu
     ```
     Answer:
     """.replace('    ', '').strip()
-    print(prompt)
+    # print('qa_rag prompt', prompt)
     return llm_mini.invoke(prompt).content
 
 
@@ -421,7 +495,7 @@ def obtain_emotional_message(uid: str, memory: Memory, context: str, emotion: st
 class Facts(BaseModel):
     facts: List[Fact] = Field(
         min_items=0,
-        max_items=3,
+        # max_items=3,
         description="List of new user facts, preferences, interests, or topics.",
     )
 
@@ -440,18 +514,18 @@ def new_facts_extractor(uid: str, segments: List[TranscriptSegment]) -> List[Fac
     You are an experienced detective, whose job is to create detailed profile personas based on conversations.
 
     You will be given a low quality audio recording transcript of a conversation or something {user_name} listened to, and a list of existing facts we know about {user_name}.
-    Your task is to determine **new** facts, preferences, and interests about {user_name}, based on the transcript.
-
+    Your task is to determine **new** facts like age, city of living, marriage status, health, friends names, preferences,work facts, allergies, preferences, interests or anything else that is important to know about {user_name}, based on the transcript.
     Make sure these facts are:
     - Relevant, and are not repetitive or similar to the existing facts we know about {user_name}, in this case, is preferred to have breadth than too much depth on specifics.
-    - Use a format of "{user_name} likes to play tennis on weekends.".
+    - Use a format of "{user_name} is 25 years old".
     - Contain one of the categories available.
     - Non sex assignable, do not use "her", "his", "he", "she", as we don't know if {user_name} is a male or female.
+    - Examples: "{user_name} lives in San Francisco", "{user_name} is single but currently dating Anna", "{user_name} has a friend called "John" who is a 26yo entrepreneur working on a health startup", "{user_name} recently learned that it's important to hire people only when you have Product Market Fit", "{user_name} recently learned that Pavel Durov recommends not to drink alcohol".
 
     This way we can create a more accurate profile. 
-    Include from 0 up to 3 valuable facts, If you don't find any new facts, or ones worth storing, output an empty list of facts. 
+    Include from 0 up to 5 valuable facts, If you don't find any new facts, or ones worth storing, output an empty list of facts. 
 
-    Existing Facts that were: {facts_str}
+    Existing Facts that were before (ignore previous structure): {facts_str}
 
     Conversation:
     ```
@@ -531,6 +605,7 @@ def trends_extractor(memory: Memory) -> List[Item]:
 # ************* RANDOM JOAN SPECIFIC FEATURES **************
 # **********************************************************
 
+
 def followup_question_prompt(segments: List[TranscriptSegment]):
     transcript_str = TranscriptSegment.segments_as_string(segments, include_timestamps=False)
     words = transcript_str.split()
@@ -551,4 +626,259 @@ def followup_question_prompt(segments: List[TranscriptSegment]):
         Output your response in plain text, without markdown.
         Output only the question, without context, be concise and straight to the point.
         """.replace('    ', '').strip()
+    return llm_mini.invoke(prompt).content
+
+
+# **********************************************
+# ************* CHAT V2 LANGGRAPH **************
+# **********************************************
+
+class ExtractedInformation(BaseModel):
+    people: List[str] = Field(
+        default=[],
+        description='Identify all the people names who were mentioned during the conversation.'
+    )
+    topics: List[str] = Field(
+        default=[],
+        description='List all the main topics and subtopics that were discussed.',
+    )
+    entities: List[str] = Field(
+        default=[],
+        description='List any products, technologies, places, or other entities that are relevant to the conversation.'
+    )
+    dates: List[str] = Field(
+        default=[],
+        description=f'Extract any dates mentioned in the conversation. Use the format YYYY-MM-DD.'
+    )
+
+
+class FiltersToUse(BaseModel):
+    people: List[str] = Field(default=[], description='People, names that could be relevant')
+    topics: List[str] = Field(default=[], description='Topics and subtopics that can help finding more information')
+    entities: List[str] = Field(
+        default=[], description='products, technologies, places, or other entities that could be relevant.'
+    )
+
+
+class OutputQuestion(BaseModel):
+    question: str = Field(description='The extracted user question from the conversation.')
+
+
+def extract_question_from_conversation(messages: List[Message]) -> str:
+    prompt = f'''
+    You will be given a recent conversation within a user and an AI, \
+    there could be a few messages exchanged, and partly built up the proper question, \
+    your task is to understand the last few messages, and identify the single question that the user is asking.
+
+    Output at WH-question, that is, a question that starts with a WH-word, like "What", "When", "Where", "Who", "Why", "How".
+
+    Conversation:
+    ```
+    {Message.get_messages_as_string(messages)}
+    ```
+    '''.replace('    ', '').strip()
+    return llm_mini.with_structured_output(OutputQuestion).invoke(prompt).question
+
+
+def retrieve_metadata_fields_from_transcript(
+        uid: str, created_at: datetime, transcript_segment: List[dict]
+) -> ExtractedInformation:
+    transcript = ''
+    for segment in transcript_segment:
+        transcript += f'{segment["text"].strip()}\n\n'
+
+    # TODO: ask it to use max 2 words? to have more standardization possibilities
+    prompt = f'''
+    You will be given the raw transcript of a conversation, this transcript has about 20% word error rate, 
+    and diarization is also made very poorly.
+
+    Your task is to extract the most accurate information from the conversation in the output object indicated below.
+
+    Make sure as a first step, you infer and fix the raw transcript errors and then proceed to extract the information.
+
+    For context when extracting dates, today is {created_at.strftime('%Y-%m-%d')}.
+    If one says "today", it means the current day.
+    If one says "tomorrow", it means the next day after today.
+    If one says "yesterday", it means the day before today.
+    If one says "next week", it means the next monday.
+    Do not include dates greater than 2025.
+    
+    Conversation Transcript:
+    ```
+    {transcript}
+    ```
+    '''.replace('    ', '')
+    try:
+        result: ExtractedInformation = llm_mini.with_structured_output(ExtractedInformation).invoke(prompt)
+    except Exception as e:
+        print('e', e)
+        return {'people': [], 'topics': [], 'entities': [], 'dates': []}
+
+    def normalize_filter(value: str) -> str:
+        # Convert to lowercase and strip whitespace
+        value = value.lower().strip()
+
+        # Remove special characters and extra spaces
+        value = re.sub(r'[^\w\s-]', '', value)
+        value = re.sub(r'\s+', ' ', value)
+
+        # Remove common filler words
+        filler_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'}
+        value = ' '.join(word for word in value.split() if word not in filler_words)
+
+        # Standardize common variations
+        value = value.replace('artificial intelligence', 'ai')
+        value = value.replace('machine learning', 'ml')
+        value = value.replace('natural language processing', 'nlp')
+
+        return value.strip()
+
+    metadata = {
+        'people': [normalize_filter(p) for p in result.people],
+        'topics': [normalize_filter(t) for t in result.topics],
+        'entities': [normalize_filter(e) for e in result.topics],
+        'dates': []
+    }
+    # 'dates': [date.strftime('%Y-%m-%d') for date in result.dates],
+    for date in result.dates:
+        try:
+            date = datetime.strptime(date, '%Y-%m-%d')
+            if date.year > 2025:
+                continue
+            metadata['dates'].append(date.strftime('%Y-%m-%d'))
+        except Exception as e:
+            print(f'Error parsing date: {e}')
+
+    for p in metadata['people']:
+        add_filter_category_item(uid, 'people', p)
+    for t in metadata['topics']:
+        add_filter_category_item(uid, 'topics', t)
+    for e in metadata['entities']:
+        add_filter_category_item(uid, 'entities', e)
+    for d in metadata['dates']:
+        add_filter_category_item(uid, 'dates', d)
+
+    return metadata
+
+
+def select_structured_filters(question: str, filters_available: dict) -> dict:
+    prompt = f'''
+    Based on a question asked by the user to an AI, the AI needs to search for the user information related to topics, entities, people, and dates that will help it answering.
+    Your task is to identify the correct fields that can be related to the question and can help answering.
+    
+    You must choose for each field, only the ones available in the JSON below.
+    Find as many as possible that can relate to the question asked.
+    ```
+    {json.dumps(filters_available, indent=2)}
+    ```
+
+    Question: {question}
+    '''.replace('    ', '').strip()
+    # print(prompt)
+    with_parser = llm_mini.with_structured_output(FiltersToUse)
+    try:
+        response: FiltersToUse = with_parser.invoke(prompt)
+        print('select_structured_filters:', response.dict())
+        response.topics = [t for t in response.topics if t in filters_available['topics']]
+        response.people = [p for p in response.people if p in filters_available['people']]
+        response.entities = [e for e in response.entities if e in filters_available['entities']]
+        return response.dict()
+    except ValidationError:
+        return {}
+
+
+# **************************************************
+# ************* REALTIME V2 LANGGRAPH **************
+# **************************************************
+
+
+def extract_question_from_transcript(uid: str, segments: List[TranscriptSegment]) -> str:
+    user_name, facts_str = get_prompt_facts(uid)
+    prompt = f'''
+    {user_name} is having a conversation. 
+
+    This is what you know about {user_name}: {facts_str}
+
+    You will be the transcript of a recent conversation between {user_name} and a few people, \
+    your task is to understand the last few exchanges, and identify in order to provide advice to {user_name}, what other things about {user_name} \
+    you should know.
+
+    For example, if the conversation is about a new job, you should output a question like "What discussions have I had about job search?".
+    For example, if the conversation is about a new programming languages, you should output a question like "What have I chatted about programming?".
+
+    Make sure as a first step, you infer and fix the raw transcript errors and then proceed to figure out the most meaningful question to ask.
+
+    You must output at WH-question, that is, a question that starts with a WH-word, like "What", "When", "Where", "Who", "Why", "How".
+
+    Conversation:
+    ```
+    {TranscriptSegment.segments_as_string(segments)}
+    ```
+    '''.replace('    ', '').strip()
+    return llm_mini.with_structured_output(OutputQuestion).invoke(prompt).question
+
+
+class OutputMessage(BaseModel):
+    message: str = Field(description='The message to be sent to the user.', max_length=200)
+
+
+def provide_advice_message(uid: str, segments: List[TranscriptSegment], context: str) -> str:
+    user_name, facts_str = get_prompt_facts(uid)
+    transcript = TranscriptSegment.segments_as_string(segments)
+    # TODO: tweak with different type of requests, like this, or roast, or praise or emotional, etc.
+
+    prompt = f"""
+    You are a brutally honest, very creative, sometimes funny, indefatigable personal life coach who helps people improve their own agency in life, \
+    pulling in pop culture references and inspirational business and life figures from recent history, mixed in with references to recent personal memories, 
+    to help drive the point across. 
+    
+    {facts_str}
+    
+    {user_name} just had a conversation and is asking for advice on what to do next.
+    
+    In order to answer you must analyize:
+    - The conversation transcript.
+    - The related conversations from previous days.
+    - The facts you know about {user_name}.
+    
+    You start all your sentences with:
+    - "If I were you, I would do this..."
+    - "I think you should do x..."
+    - "I believe you need to do y..."
+    
+    Your sentences are short, to the point, and very direct, at most 20 words.
+    MUST OUTPUT 20 words or less.
+
+    Conversation Transcript:
+    {transcript}
+
+    Context:
+    ```
+    {context}
+    ```
+    """.replace('    ', '').strip()
+    return llm_mini.with_structured_output(OutputMessage).invoke(prompt).message
+
+
+# **************************************************
+# ************* PROACTIVE NOTIFICATION PLUGIN **************
+# **************************************************
+
+def get_proactive_message(uid: str, plugin_prompt: str, params: [str], context: str) -> str:
+    user_name, facts_str = get_prompt_facts(uid)
+
+    prompt = plugin_prompt
+    for param in params:
+        if param == "user_name":
+            prompt = prompt.replace("{{user_name}}", user_name)
+            continue
+        if param == "user_facts":
+            prompt = prompt.replace("{{user_facts}}", facts_str)
+            continue
+        if param == "user_context":
+            prompt = prompt.replace("{{user_context}}", context if context else "")
+            continue
+    prompt = prompt.replace('    ', '').strip()
+    #print(prompt)
+
     return llm_mini.invoke(prompt).content

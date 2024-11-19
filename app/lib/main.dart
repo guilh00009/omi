@@ -8,6 +8,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart' as ble;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:friend_private/backend/auth.dart';
+import 'package:friend_private/backend/http/api/custom_auth.dart';
 import 'package:friend_private/backend/preferences.dart';
 import 'package:friend_private/env/dev_env.dart';
 import 'package:friend_private/env/env.dart';
@@ -15,9 +16,11 @@ import 'package:friend_private/env/prod_env.dart';
 import 'package:friend_private/firebase_options_dev.dart' as dev;
 import 'package:friend_private/firebase_options_prod.dart' as prod;
 import 'package:friend_private/flavors.dart';
+import 'package:friend_private/pages/apps/providers/add_app_provider.dart';
 import 'package:friend_private/pages/home/page.dart';
 import 'package:friend_private/pages/memory_detail/memory_detail_provider.dart';
 import 'package:friend_private/pages/onboarding/wrapper.dart';
+import 'package:friend_private/providers/app_provider.dart';
 import 'package:friend_private/providers/auth_provider.dart';
 import 'package:friend_private/providers/calendar_provider.dart';
 import 'package:friend_private/providers/capture_provider.dart';
@@ -28,7 +31,6 @@ import 'package:friend_private/providers/home_provider.dart';
 import 'package:friend_private/providers/memory_provider.dart';
 import 'package:friend_private/providers/message_provider.dart';
 import 'package:friend_private/providers/onboarding_provider.dart';
-import 'package:friend_private/providers/app_provider.dart';
 import 'package:friend_private/providers/speech_profile_provider.dart';
 import 'package:friend_private/services/notifications.dart';
 import 'package:friend_private/services/services.dart';
@@ -64,7 +66,11 @@ Future<bool> _init() async {
 
   bool isAuth = false;
   try {
-    isAuth = (await getIdToken()) != null;
+    if (SharedPreferencesUtil().customBackendUrl.isNotEmpty) {
+      isAuth = await customAuthSignIn(SharedPreferencesUtil().email, SharedPreferencesUtil().customAuthPassword);
+    } else {
+      isAuth = (await getIdToken()) != null;
+    }
   } catch (e) {} // if no connect this will fail
 
   if (isAuth) MixpanelManager().identify();
@@ -87,13 +93,12 @@ void main() async {
   // _setupAudioSession();
   bool isAuth = await _init();
   if (Env.instabugApiKey != null) {
-    Instabug.setWelcomeMessageMode(WelcomeMessageMode.disabled);
+    await Instabug.setWelcomeMessageMode(WelcomeMessageMode.disabled);
     runZonedGuarded(
       () async {
         Instabug.init(
           token: Env.instabugApiKey!,
-          invocationEvents: [InvocationEvent.shake, InvocationEvent.screenshot],
-          // invocationEvents: [],
+          invocationEvents: [InvocationEvent.none],
         );
         if (isAuth) {
           Instabug.identifyUser(
@@ -191,6 +196,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           ),
           ChangeNotifierProvider(create: (context) => CalenderProvider()),
           ChangeNotifierProvider(create: (context) => DeveloperModeProvider()),
+          ChangeNotifierProxyProvider<AppProvider, AddAppProvider>(
+            create: (context) => AddAppProvider(),
+            update: (BuildContext context, value, AddAppProvider? previous) =>
+                (previous?..setAppProvider(value)) ?? AddAppProvider(),
+          ),
         ],
         builder: (context, child) {
           return WithForegroundTask(
@@ -275,10 +285,11 @@ class _DeciderWidgetState extends State<DeciderWidget> {
         NotificationService.instance.saveNotificationToken();
       }
 
-      if (context.read<AuthenticationProvider>().user != null) {
+      if (context.read<AuthenticationProvider>().user != null ||
+          (SharedPreferencesUtil().customBackendUrl.isNotEmpty && SharedPreferencesUtil().authToken.isNotEmpty)) {
         context.read<HomeProvider>().setupHasSpeakerProfile();
         IntercomManager.instance.intercom.loginIdentifiedUser(
-          userId: FirebaseAuth.instance.currentUser!.uid,
+          userId: SharedPreferencesUtil().uid,
         );
         context.read<MessageProvider>().setMessagesFromCache();
         context.read<AppProvider>().setAppsFromCache();
@@ -295,7 +306,10 @@ class _DeciderWidgetState extends State<DeciderWidget> {
   Widget build(BuildContext context) {
     return Consumer<AuthenticationProvider>(
       builder: (context, authProvider, child) {
-        if (SharedPreferencesUtil().onboardingCompleted && authProvider.user != null) {
+        if (SharedPreferencesUtil().onboardingCompleted &&
+            (authProvider.user != null ||
+                (SharedPreferencesUtil().customBackendUrl.isNotEmpty &&
+                    SharedPreferencesUtil().authToken.isNotEmpty))) {
           return const HomePageWrapper();
         } else {
           return const OnboardingWrapper();

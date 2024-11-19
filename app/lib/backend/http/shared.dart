@@ -11,13 +11,21 @@ import 'package:internet_connection_checker_plus/internet_connection_checker_plu
 
 Future<String> getAuthHeader() async {
   DateTime? expiry = DateTime.fromMillisecondsSinceEpoch(SharedPreferencesUtil().tokenExpirationTime);
-  if (SharedPreferencesUtil().authToken == '' ||
-      expiry.isBefore(DateTime.now()) ||
+  bool hasAuthToken = SharedPreferencesUtil().authToken.isNotEmpty;
+
+  bool isExpirationDateValid = !(expiry.isBefore(DateTime.now()) ||
       expiry.isAtSameMomentAs(DateTime.fromMillisecondsSinceEpoch(0)) ||
-      (expiry.isBefore(DateTime.now().add(const Duration(minutes: 5))) && expiry.isAfter(DateTime.now()))) {
+      (expiry.isBefore(DateTime.now().add(const Duration(minutes: 5))) && expiry.isAfter(DateTime.now())));
+
+  if (SharedPreferencesUtil().customBackendUrl.isNotEmpty && (!hasAuthToken || !isExpirationDateValid)) {
+    throw Exception('No auth token found');
+  }
+
+  if (!hasAuthToken || !isExpirationDateValid) {
     SharedPreferencesUtil().authToken = await getIdToken() ?? '';
   }
-  if (SharedPreferencesUtil().authToken == '') {
+
+  if (!hasAuthToken) {
     if (isSignedIn()) {
       // should only throw if the user is signed in but the token is not found
       // if the user is not signed in, the token will always be empty
@@ -100,7 +108,8 @@ Future<http.Response> _performRequest(
     case 'GET':
       return await client.get(Uri.parse(url), headers: headers);
     case 'DELETE':
-      return await client.delete(Uri.parse(url), headers: headers);
+      headers['Content-Type'] = 'application/json';
+      return await client.delete(Uri.parse(url), headers: headers, body: body);
     case 'PATCH':
       headers['Content-Type'] = 'application/json';
       return await client.patch(Uri.parse(url), headers: headers, body: body);

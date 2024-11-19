@@ -95,15 +95,43 @@ class SharedPreferencesUtil {
 
   String get webhookAudioBytesDelay => getString('webhookAudioBytesDelay') ?? '';
 
+  set webhookDaySummary(String value) => saveString('webhookDaySummary', value);
+
+  String get webhookDaySummary => getString('webhookDaySummary') ?? '';
+
   set webhookAudioBytesDelay(String value) => saveString('webhookAudioBytesDelay', value);
+
+  set devModeJoanFollowUpEnabled(bool value) => saveBool('devModeJoanFollowUpEnabled', value);
+
+  bool get devModeJoanFollowUpEnabled => getBool('devModeJoanFollowUpEnabled') ?? false;
+
+  set memoryEventsToggled(bool value) => saveBool('memoryEventsToggled', value);
+
+  bool get memoryEventsToggled => getBool('memoryEventsToggled') ?? false;
+
+  set transcriptsToggled(bool value) => saveBool('transcriptsToggled', value);
+
+  bool get transcriptsToggled => getBool('transcriptsToggled') ?? false;
+
+  set audioBytesToggled(bool value) => saveBool('audioBytesToggled', value);
+
+  bool get audioBytesToggled => getBool('audioBytesToggled') ?? false;
+
+  set daySummaryToggled(bool value) => saveBool('daySummaryToggled', value);
+
+  bool get daySummaryToggled => getBool('daySummaryToggled') ?? false;
 
   set localSyncEnabled(bool value) => saveBool('localSyncEnabled', value);
 
-  bool get localSyncEnabled => getBool('localSyncEnabled') ?? false;
+  bool get localSyncEnabled => getBool('localSyncEnabled') ?? true;
 
   bool get showSummarizeConfirmation => getBool('showSummarizeConfirmation') ?? true;
 
   set showSummarizeConfirmation(bool value) => saveBool('showSummarizeConfirmation', value);
+
+  bool get showSubmitAppConfirmation => getBool('showSubmitAppConfirmation') ?? true;
+
+  set showSubmitAppConfirmation(bool value) => saveBool('showSubmitAppConfirmation', value);
 
   String get recordingsLanguage => getString('recordingsLanguage') ?? 'en';
 
@@ -333,7 +361,7 @@ class SharedPreferencesUtil {
 
   set familyName(String value) => saveString('familyName', value);
 
-  String get fullName => '$givenName $familyName';
+  String get fullName => '$givenName $familyName'.trim();
 
   set locationPermissionRequested(bool value) => saveBool('locationPermissionRequested', value);
 
@@ -350,10 +378,6 @@ class SharedPreferencesUtil {
     final List<String> value = getStringList('wals') ?? [];
     return Wal.fromJsonList(value.map((e) => jsonDecode(e)).toList());
   }
-
-  set devModeJoanFollowUpEnabled(bool value) => saveBool('devModeJoanFollowUpEnabled', value);
-
-  bool get devModeJoanFollowUpEnabled => getBool('devModeJoanFollowUpEnabled') ?? false;
 
   //--------------------------- Setters & Getters -----------------------------//
 
@@ -404,4 +428,12 @@ class SharedPreferencesUtil {
   Future<bool> clear() async {
     return await _preferences?.clear() ?? false;
   }
+
+  String get customBackendUrl => getString('customBackendUrl') ?? '';
+
+  set customBackendUrl(String value) => saveString('customBackendUrl', value);
+
+  String get customAuthPassword => getString('customAuthPassword') ?? '';
+
+  set customAuthPassword(String value) => saveString('customAuthPassword', value);
 }

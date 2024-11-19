@@ -52,14 +52,55 @@ def delete_generic_cache(path: str):
     r.delete(f'cache:{key}')
 
 
-def set_plugin_review(plugin_id: str, uid: str, score: float, review: str = ''):
+# ******************************************************
+# *********************** APPS *************************
+# ******************************************************
+
+
+def set_app_usage_history_cache(app_id: str, usage: List[dict]):
+    r.set(f'apps:{app_id}:usage', json.dumps(usage, default=str), ex=60 * 5)  # 5 minutes
+
+
+def get_app_usage_history_cache(app_id: str) -> List[dict]:
+    usage = r.get(f'apps:{app_id}:usage')
+    if usage is None:
+        return []
+    usage = json.loads(usage)
+    if not usage:
+        return []
+    return usage
+
+
+def get_app_money_made_cache(app_id: str) -> dict:
+    money = r.get(f'apps:{app_id}:money')
+    if money is None:
+        return {}
+    money = json.loads(money)
+    if not money:
+        return {}
+    return money
+
+
+def set_app_money_made_cache(app_id: str, money: dict):
+    r.set(f'apps:{app_id}:money', json.dumps(money, default=str), ex=60 * 5)  # 5 minutes
+
+
+def set_plugin_review(plugin_id: str, uid: str, data: dict):
     reviews = r.get(f'plugins:{plugin_id}:reviews')
     if not reviews:
         reviews = {}
     else:
         reviews = eval(reviews)
-    reviews[uid] = {'score': score, 'review': review, 'rated_at': datetime.now(timezone.utc).isoformat(), 'uid': uid}
+    reviews[uid] = data
     r.set(f'plugins:{plugin_id}:reviews', str(reviews))
+
+
+def get_specific_user_review(app_id: str, uid: str) -> dict:
+    reviews = r.get(f'plugins:{app_id}:reviews')
+    if not reviews:
+        return {}
+    reviews = eval(reviews)
+    return reviews.get(uid, {})
 
 
 def migrate_user_plugins_reviews(prev_uid: str, new_uid: str):
@@ -228,8 +269,51 @@ def set_user_webhook_db(uid: str, wtype: str, url: str):
     r.set(f'users:{uid}:developer:webhook:{wtype}', url)
 
 
+def disable_user_webhook_db(uid: str, wtype: str):
+    r.set(f'users:{uid}:developer:webhook_status:{wtype}', str(False).lower())
+
+
+def enable_user_webhook_db(uid: str, wtype: str):
+    r.set(f'users:{uid}:developer:webhook_status:{wtype}', str(True).lower())
+
+
+def user_webhook_status_db(uid: str, wtype: str):
+    status = r.get(f'users:{uid}:developer:webhook_status:{wtype}')
+    if status is None:
+        return None
+    return status.decode() == str(True).lower()
+
+
 def get_user_webhook_db(uid: str, wtype: str) -> str:
     url = r.get(f'users:{uid}:developer:webhook:{wtype}')
     if not url:
         return ''
     return url.decode()
+
+
+def get_filter_category_items(uid: str, category: str) -> List[str]:
+    val = r.smembers(f'users:{uid}:filters:{category}')
+    if not val:
+        return []
+    return [x.decode() for x in val]
+
+
+def add_filter_category_item(uid: str, category: str, item: str):
+    r.sadd(f'users:{uid}:filters:{category}', item)
+
+
+def remove_filter_category_item(uid: str, category: str, item: str):
+    r.srem(f'users:{uid}:filters:{category}', item)
+
+
+def remove_all_filter_category_items(uid: str, category: str):
+    r.delete(f'users:{uid}:filters:{category}')
+
+
+def save_migrated_retrieval_memory_id(memory_id: str):
+    r.sadd('migrated_retrieval_memory_ids', memory_id)
+    r.expire('migrated_retrieval_memory_ids', 60 * 60 * 24 * 7)
+
+
+def has_migrated_retrieval_memory_id(memory_id: str) -> bool:
+    return r.sismember('migrated_retrieval_memory_ids', memory_id)

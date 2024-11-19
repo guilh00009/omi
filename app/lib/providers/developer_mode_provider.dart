@@ -6,6 +6,7 @@ import 'package:friend_private/providers/base_provider.dart';
 import 'package:friend_private/utils/alerts/app_snackbar.dart';
 import 'package:friend_private/utils/analytics/mixpanel.dart';
 import 'package:friend_private/utils/logger.dart';
+import 'package:friend_private/utils/other/validators.dart';
 
 class DeveloperModeProvider extends BaseProvider {
   final TextEditingController gcpCredentialsController = TextEditingController();
@@ -15,6 +16,12 @@ class DeveloperModeProvider extends BaseProvider {
   final TextEditingController webhookAudioBytes = TextEditingController();
   final TextEditingController webhookAudioBytesDelay = TextEditingController();
   final TextEditingController webhookWsAudioBytes = TextEditingController();
+  final TextEditingController webhookDaySummary = TextEditingController();
+
+  bool memoryEventsToggled = false;
+  bool transcriptsToggled = false;
+  bool audioBytesToggled = false;
+  bool daySummaryToggled = false;
 
   bool savingSettingsLoading = false;
 
@@ -23,6 +30,66 @@ class DeveloperModeProvider extends BaseProvider {
 
   bool localSyncEnabled = false;
   bool followUpQuestionEnabled = false;
+
+  void onMemoryEventsToggled(bool value) {
+    memoryEventsToggled = value;
+    if (!value) {
+      disableWebhook(type: 'memory_created');
+    } else {
+      enableWebhook(type: 'memory_created');
+    }
+    notifyListeners();
+  }
+
+  void onTranscriptsToggled(bool value) {
+    transcriptsToggled = value;
+    if (!value) {
+      disableWebhook(type: 'realtime_transcript');
+    } else {
+      enableWebhook(type: 'realtime_transcript');
+    }
+    notifyListeners();
+  }
+
+  void onAudioBytesToggled(bool value) {
+    audioBytesToggled = value;
+    if (!value) {
+      disableWebhook(type: 'audio_bytes');
+    } else {
+      enableWebhook(type: 'audio_bytes');
+    }
+    notifyListeners();
+  }
+
+  void onDaySummaryToggled(bool value) {
+    daySummaryToggled = value;
+    if (!value) {
+      disableWebhook(type: 'day_summary');
+    } else {
+      enableWebhook(type: 'day_summary');
+    }
+    notifyListeners();
+  }
+
+  Future getWebhooksStatus() async {
+    var res = await webhooksStatus();
+    if (res == null) {
+      memoryEventsToggled = false;
+      transcriptsToggled = false;
+      audioBytesToggled = false;
+      daySummaryToggled = false;
+    } else {
+      memoryEventsToggled = res['memory_created'];
+      transcriptsToggled = res['realtime_transcript'];
+      audioBytesToggled = res['audio_bytes'];
+      daySummaryToggled = res['day_summary'];
+    }
+    SharedPreferencesUtil().memoryEventsToggled = memoryEventsToggled;
+    SharedPreferencesUtil().transcriptsToggled = transcriptsToggled;
+    SharedPreferencesUtil().audioBytesToggled = audioBytesToggled;
+    SharedPreferencesUtil().daySummaryToggled = daySummaryToggled;
+    notifyListeners();
+  }
 
   Future initialize() async {
     setIsLoading(true);
@@ -34,8 +101,13 @@ class DeveloperModeProvider extends BaseProvider {
     webhookAudioBytes.text = SharedPreferencesUtil().webhookAudioBytes;
     webhookAudioBytesDelay.text = SharedPreferencesUtil().webhookAudioBytesDelay;
     followUpQuestionEnabled = SharedPreferencesUtil().devModeJoanFollowUpEnabled;
+    memoryEventsToggled = SharedPreferencesUtil().memoryEventsToggled;
+    transcriptsToggled = SharedPreferencesUtil().transcriptsToggled;
+    audioBytesToggled = SharedPreferencesUtil().audioBytesToggled;
+    daySummaryToggled = SharedPreferencesUtil().daySummaryToggled;
 
     await Future.wait([
+      getWebhooksStatus(),
       getUserWebhookUrl(type: 'audio_bytes').then((url) {
         List<dynamic> parts = url.split(',');
         if (parts.length == 2) {
@@ -56,26 +128,14 @@ class DeveloperModeProvider extends BaseProvider {
         webhookOnMemoryCreated.text = url;
         SharedPreferencesUtil().webhookOnMemoryCreated = url;
       }),
+      getUserWebhookUrl(type: 'day_summary').then((url) {
+        webhookDaySummary.text = url;
+        SharedPreferencesUtil().webhookDaySummary = url;
+      }),
     ]);
     // getUserWebhookUrl(type: 'audio_bytes_websocket').then((url) => webhookWsAudioBytes.text = url);
     setIsLoading(false);
     notifyListeners();
-  }
-
-  bool isValidUrl(String url) {
-    const urlPattern = r'^(https?:\/\/)?([a-zA-Z0-9.-]+(:[a-zA-Z0-9.&%$-]+)*@)?'
-        r'((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
-        r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|'
-        r'([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,63}(:[0-9]+)?(\/.*)?$';
-    return RegExp(urlPattern).hasMatch(url);
-  }
-
-  bool isValidWebSocketUrl(String url) {
-    const webSocketPattern = r'^(wss?:\/\/)?([a-zA-Z0-9.-]+(:[a-zA-Z0-9.&%$-]+)*@)?'
-        r'((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
-        r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|'
-        r'([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,63}(:[0-9]+)?(\/.*)?$';
-    return RegExp(webSocketPattern).hasMatch(url);
   }
 
   void saveSettings() async {
@@ -119,6 +179,11 @@ class DeveloperModeProvider extends BaseProvider {
       setIsLoading(false);
       return;
     }
+    if (webhookDaySummary.text.isNotEmpty && !isValidUrl(webhookDaySummary.text)) {
+      AppSnackbar.showSnackbarError('Invalid day summary webhook URL');
+      setIsLoading(false);
+      return;
+    }
 
     // if (webhookWsAudioBytes.text.isNotEmpty && !isValidWebSocketUrl(webhookWsAudioBytes.text)) {
     //   AppSnackbar.showSnackbarError('Invalid audio bytes websocket URL');
@@ -126,20 +191,21 @@ class DeveloperModeProvider extends BaseProvider {
     //   notifyListeners();
     //   return;
     // }
-
     var w1 = setUserWebhookUrl(
       type: 'audio_bytes',
       url: '${webhookAudioBytes.text.trim()},${webhookAudioBytesDelay.text.trim()}',
     );
     var w2 = setUserWebhookUrl(type: 'realtime_transcript', url: webhookOnTranscriptReceived.text.trim());
     var w3 = setUserWebhookUrl(type: 'memory_created', url: webhookOnMemoryCreated.text.trim());
+    var w4 = setUserWebhookUrl(type: 'day_summary', url: webhookDaySummary.text.trim());
     // var w4 = setUserWebhookUrl(type: 'audio_bytes_websocket', url: webhookWsAudioBytes.text.trim());
     try {
-      Future.wait([w1, w2, w3]);
+      Future.wait([w1, w2, w3, w4]);
       prefs.webhookAudioBytes = webhookAudioBytes.text;
       prefs.webhookAudioBytesDelay = webhookAudioBytesDelay.text;
       prefs.webhookOnTranscriptReceived = webhookOnTranscriptReceived.text;
       prefs.webhookOnMemoryCreated = webhookOnMemoryCreated.text;
+      prefs.webhookDaySummary = webhookDaySummary.text;
     } catch (e) {
       Logger.error('Error occurred while updating endpoints: $e');
     }

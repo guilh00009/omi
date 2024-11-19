@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 
 class ExpandableTextWidget extends StatefulWidget {
   final String text;
@@ -42,12 +43,34 @@ class _ExpandableTextWidgetState extends State<ExpandableTextWidget> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            widget.text,
-            style: widget.style,
-            maxLines: widget.isExpanded ? 10000 : widget.maxLines,
-            overflow: TextOverflow.ellipsis,
+          MarkdownBody(
+            shrinkWrap: true,
+            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+              a: widget.style,
+              p: widget.style,
+              blockquote: widget.style.copyWith(
+                backgroundColor: Colors.transparent,
+                color: Colors.black,
+              ),
+              blockquoteDecoration: BoxDecoration(
+                color: Colors.grey.shade800,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              code: widget.style.copyWith(
+                backgroundColor: Colors.transparent,
+                decoration: TextDecoration.none,
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            data: widget.isExpanded ? widget.text : widget.text.length > 300 ?widget.text.substring(0, 300): widget.text,
           ),
+          // Text(
+          //   widget.text,
+          //   style: widget.style,
+          //   maxLines: widget.isExpanded ? 10000 : widget.maxLines,
+          //   overflow: TextOverflow.ellipsis,
+          // ),
           if (isOverflowing)
             InkWell(
               onTap: () => widget.toggleExpand(),

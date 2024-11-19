@@ -53,6 +53,44 @@ Future<String> getUserWebhookUrl({required String type}) async {
   return '';
 }
 
+Future disableWebhook({required String type}) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/users/developer/webhook/$type/disable',
+    headers: {},
+    method: 'POST',
+    body: '',
+  );
+  if (response == null) return false;
+  if (response.statusCode == 204) return true;
+  return false;
+}
+
+Future enableWebhook({required String type}) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/users/developer/webhook/$type/enable',
+    headers: {},
+    method: 'POST',
+    body: '',
+  );
+  if (response == null) return false;
+  if (response.statusCode == 204) return true;
+  return false;
+}
+
+Future webhooksStatus() async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/users/developer/webhooks/status',
+    headers: {},
+    method: 'GET',
+    body: '',
+  );
+  if (response == null) return null;
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body);
+  }
+  return null;
+}
+
 Future<bool> deleteAccount() async {
   var response = await makeApiCall(
     url: '${Env.apiBaseUrl}v1/users/delete-account',
@@ -197,4 +235,50 @@ Future<String> getFollowUpQuestion({String memoryId = '0'}) async {
     return jsonResponse['result'] as String? ?? '';
   }
   return '';
+}
+
+/*Analytics*/
+
+Future<bool> setMemorySummaryRating(String memoryId, int value, {String? reason}) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/users/analytics/memory_summary?memory_id=$memoryId&value=$value&reason=$reason',
+    headers: {},
+    method: 'POST',
+    body: '',
+  );
+  if (response == null) return false;
+  debugPrint('setMemorySummaryRating response: ${response.body}');
+  return response.statusCode == 200;
+}
+
+
+Future<bool> setMessageResponseRating(String messageId, int value) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/users/analytics/chat_message?message_id=$messageId&value=$value',
+    headers: {},
+    method: 'POST',
+    body: '',
+  );
+  if (response == null) return false;
+  debugPrint('setMessageResponseRating response: ${response.body}');
+  return response.statusCode == 200;
+}
+
+
+Future<bool> getHasMemorySummaryRating(String memoryId) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/users/analytics/memory_summary?memory_id=$memoryId',
+    headers: {},
+    method: 'GET',
+    body: '',
+  );
+  if (response == null) return false;
+  debugPrint('getHasMemorySummaryRating response: ${response.body}');
+
+  try {
+    var jsonResponse = jsonDecode(response.body);
+    return jsonResponse['has_rating'] as bool? ?? false;
+  } catch (e) {
+    return false;
+  }
 }

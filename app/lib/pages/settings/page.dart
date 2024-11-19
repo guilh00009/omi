@@ -3,7 +3,6 @@ import 'package:friend_private/backend/auth.dart';
 import 'package:friend_private/backend/preferences.dart';
 import 'package:friend_private/main.dart';
 import 'package:friend_private/pages/settings/about.dart';
-import 'package:friend_private/pages/settings/calendar.dart';
 import 'package:friend_private/pages/settings/developer.dart';
 import 'package:friend_private/pages/settings/profile.dart';
 import 'package:friend_private/pages/settings/widgets.dart';
@@ -86,7 +85,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => DeviceSettings(),
+                        builder: (context) => const DeviceSettings(),
                       ),
                     );
                   },
@@ -107,12 +106,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 //   icon: Icons.integration_instructions,
                 // ),
                 // const SizedBox(height: 8),
-                getItemAddOn2(
-                  'Calendar Integration',
-                  () => routeToPage(context, const CalendarPage()),
-                  icon: Icons.calendar_month,
-                ),
-                const SizedBox(height: 20),
+                // getItemAddOn2(
+                //   'Calendar Integration',
+                //   () => routeToPage(context, const CalendarPage()),
+                //   icon: Icons.calendar_month,
+                // ),
+                // const SizedBox(height: 20),
                 getItemAddOn2(
                   'About Omi',
                   () => routeToPage(context, const AboutOmiPage()),

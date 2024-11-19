@@ -3,43 +3,12 @@ import 'package:friend_private/backend/schema/memory.dart';
 import 'package:friend_private/pages/capture/widgets/widgets.dart';
 import 'package:friend_private/pages/memories/widgets/local_sync.dart';
 import 'package:friend_private/pages/memories/widgets/processing_capture.dart';
-import 'package:friend_private/pages/memories/widgets/sd_card.dart';
 import 'package:friend_private/providers/memory_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import 'widgets/empty_memories.dart';
 import 'widgets/memories_group_widget.dart';
-
-String secondsToHumanReadable(int seconds) {
-  if (seconds < 60) {
-    return '$seconds secs';
-  } else if (seconds < 3600) {
-    var minutes = (seconds / 60).floor();
-    var remainingSeconds = seconds % 60;
-    if (remainingSeconds == 0) {
-      return '$minutes mins';
-    } else {
-      return '$minutes mins $remainingSeconds secs';
-    }
-  } else if (seconds < 86400) {
-    var hours = (seconds / 3600).floor();
-    var remainingMinutes = (seconds % 3600 / 60).floor();
-    if (remainingMinutes == 0) {
-      return '$hours hours';
-    } else {
-      return '$hours hours $remainingMinutes mins';
-    }
-  } else {
-    var days = (seconds / 86400).floor();
-    var remainingHours = (seconds % 86400 / 3600).floor();
-    if (remainingHours == 0) {
-      return '$days days';
-    } else {
-      return '$days days $remainingHours hours';
-    }
-  }
-}
 
 class MemoriesPage extends StatefulWidget {
   const MemoriesPage({super.key});
@@ -77,7 +46,6 @@ class _MemoriesPageState extends State<MemoriesPage> with AutomaticKeepAliveClie
         },
         child: CustomScrollView(
           slivers: [
-            const SliverToBoxAdapter(child: SdCardBannerWidget()),
             const SliverToBoxAdapter(child: SizedBox(height: 26)),
             const SliverToBoxAdapter(child: SpeechProfileCardWidget()),
             const SliverToBoxAdapter(child: UpdateFirmwareCardWidget()),

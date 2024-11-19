@@ -1,12 +1,12 @@
 import threading
 import uuid
-from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from database.memories import get_in_progress_memory, get_memory
-from database.redis_db import cache_user_geolocation, set_user_webhook_db, get_user_webhook_db
+from database.redis_db import cache_user_geolocation, set_user_webhook_db, get_user_webhook_db, disable_user_webhook_db, \
+    enable_user_webhook_db, user_webhook_status_db
 from database.users import *
 from models.memory import Geolocation, Memory
 from models.other import Person, CreatePerson
@@ -15,11 +15,11 @@ from utils.llm import followup_question_prompt
 from utils.other import endpoints as auth
 from utils.other.storage import delete_all_memory_recordings, get_user_person_speech_samples, \
     delete_user_person_speech_samples
+from utils.webhooks import webhook_first_time_setup
 
 router = APIRouter()
 
 
-# TODO: url should be /v1/users
 @router.delete('/v1/users/delete-account', tags=['v1'])
 def delete_account(uid: str = Depends(auth.get_current_user_uid)):
     try:
@@ -45,13 +45,51 @@ def set_user_geolocation(geolocation: Geolocation, uid: str = Depends(auth.get_c
 
 @router.post('/v1/users/developer/webhook/{wtype}', tags=['v1'])
 def set_user_webhook_endpoint(wtype: WebhookType, data: dict, uid: str = Depends(auth.get_current_user_uid)):
-    set_user_webhook_db(uid, wtype, data['url'])
+    url = data['url']
+    if url == '' or url == ',':
+        disable_user_webhook_db(uid, wtype)
+    set_user_webhook_db(uid, wtype, url)
     return {'status': 'ok'}
 
 
 @router.get('/v1/users/developer/webhook/{wtype}', tags=['v1'])
 def get_user_webhook_endpoint(wtype: WebhookType, uid: str = Depends(auth.get_current_user_uid)):
     return {'url': get_user_webhook_db(uid, wtype)}
+
+
+@router.post('/v1/users/developer/webhook/{wtype}/disable', tags=['v1'])
+def disable_user_webhook_endpoint(wtype: WebhookType, uid: str = Depends(auth.get_current_user_uid)):
+    disable_user_webhook_db(uid, wtype)
+    return {'status': 'ok'}
+
+
+@router.post('/v1/users/developer/webhook/{wtype}/enable', tags=['v1'])
+def enable_user_webhook_endpoint(wtype: WebhookType, uid: str = Depends(auth.get_current_user_uid)):
+    enable_user_webhook_db(uid, wtype)
+    return {'status': 'ok'}
+
+
+@router.get('/v1/users/developer/webhooks/status', tags=['v1'])
+def get_user_webhooks_status(uid: str = Depends(auth.get_current_user_uid)):
+    # This only happens the first time because the user_webhook_status_db function will return None for existing users
+    audio_bytes = user_webhook_status_db(uid, WebhookType.audio_bytes)
+    if audio_bytes is None:
+        audio_bytes = webhook_first_time_setup(uid, WebhookType.audio_bytes)
+    memory_created = user_webhook_status_db(uid, WebhookType.memory_created)
+    if memory_created is None:
+        memory_created = webhook_first_time_setup(uid, WebhookType.memory_created)
+    realtime_transcript = user_webhook_status_db(uid, WebhookType.realtime_transcript)
+    if realtime_transcript is None:
+        realtime_transcript = webhook_first_time_setup(uid, WebhookType.realtime_transcript)
+    day_summary = user_webhook_status_db(uid, WebhookType.day_summary)
+    if day_summary is None:
+        day_summary = webhook_first_time_setup(uid, WebhookType.day_summary)
+    return {
+        'audio_bytes': audio_bytes,
+        'memory_created': memory_created,
+        'realtime_transcript': realtime_transcript,
+        'day_summary': day_summary
+    }
 
 
 # *************************************************
@@ -152,3 +190,39 @@ def delete_person_endpoint(memory_id: str, uid: str = Depends(auth.get_current_u
         memory = get_memory(uid, memory_id)
     memory = Memory(**memory)
     return {'result': followup_question_prompt(memory.transcript_segments)}
+
+
+# **************************************
+# ************* Analytics **************
+# **************************************
+
+@router.post('/v1/users/analytics/memory_summary', tags=['v1'])
+def set_memory_summary_rating(
+        memory_id: str,
+        value: int,  # 0, 1, -1 (shown)
+        uid: str = Depends(auth.get_current_user_uid),
+):
+    set_memory_summary_rating_score(uid, memory_id, value)
+    return {'status': 'ok'}
+
+
+@router.get('/v1/users/analytics/memory_summary', tags=['v1'])
+def get_memory_summary_rating(
+        memory_id: str,
+        _: str = Depends(auth.get_current_user_uid),
+):
+    rating = get_memory_summary_rating_score(memory_id)
+    # TODO: later ask reason, a set of options, if user says good, whats the best, if bad, whats the worst
+    if not rating:
+        return {'has_rating': False}
+    return {'has_rating': rating.get('value', -1) != -1, 'rating': rating.get('value', -1)}
+
+
+@router.post('/v1/users/analytics/chat_message', tags=['v1'])
+def set_chat_message_analytics(
+        message_id: str,
+        value: int,
+        uid: str = Depends(auth.get_current_user_uid),
+):
+    set_chat_message_rating_score(uid, message_id, value)
+    return {'status': 'ok'}

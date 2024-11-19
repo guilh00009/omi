@@ -1,15 +1,12 @@
 import 'dart:async';
 
-import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:friend_private/backend/http/api/memories.dart';
 import 'package:friend_private/backend/preferences.dart';
 import 'package:friend_private/backend/schema/memory.dart';
-import 'package:friend_private/backend/schema/structured.dart';
 import 'package:friend_private/services/services.dart';
 import 'package:friend_private/services/wals.dart';
 import 'package:friend_private/utils/analytics/mixpanel.dart';
-import 'package:friend_private/utils/features/calendar.dart';
 
 class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWalSyncProgressListener {
   List<ServerMemory> memories = [];
@@ -25,27 +22,32 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
 
   List<ServerMemory> processingMemories = [];
 
-  IWalService get _walService => ServiceManager.instance().wal;
+  IWalService get _wal => ServiceManager.instance().wal;
 
   List<Wal> _missingWals = [];
+
   List<Wal> get missingWals => _missingWals;
+
   int get missingWalsInSeconds =>
       _missingWals.isEmpty ? 0 : _missingWals.map((val) => val.seconds).reduce((a, b) => a + b);
 
   double _walsSyncedProgress = 0.0;
+
   double get walsSyncedProgress => _walsSyncedProgress;
 
   bool isSyncing = false;
   bool syncCompleted = false;
+  List<bool> multipleSyncs = [];
+  bool isFetchingMemories = false;
   List<SyncedMemoryPointer> syncedMemoriesPointers = [];
 
   MemoryProvider() {
-    _walService.subscribe(this, this);
+    _wal.subscribe(this, this);
     _preload();
   }
 
   _preload() async {
-    _missingWals = await _walService.getMissingWals();
+    _missingWals = await _wal.getSyncs().getMissingWals();
     notifyListeners();
   }
 
@@ -153,22 +155,21 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
     var mem = await getMemories();
     memories = mem;
     memories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    createEventsForMemories();
     setLoadingMemories(false);
     notifyListeners();
     return memories;
   }
 
-  void createEventsForMemories() {
-    for (var memory in memories) {
-      if (memory.structured.events.isNotEmpty &&
-          !memory.structured.events.first.created &&
-          memory.startedAt != null &&
-          memory.startedAt!.isAfter(DateTime.now().add(const Duration(days: -1)))) {
-        _handleCalendarCreation(memory);
-      }
-    }
-  }
+  // void createEventsForMemories() {
+  //   for (var memory in memories) {
+  //     if (memory.structured.events.isNotEmpty &&
+  //         !memory.structured.events.first.created &&
+  //         memory.startedAt != null &&
+  //         memory.startedAt!.isAfter(DateTime.now().add(const Duration(days: -1)))) {
+  //       _handleCalendarCreation(memory);
+  //     }
+  //   }
+  // }
 
   Future getMoreMemoriesFromServer() async {
     if (memories.length % 50 != 0) return;
@@ -267,26 +268,26 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
     notifyListeners();
   }
 
-  _handleCalendarCreation(ServerMemory memory) {
-    if (!SharedPreferencesUtil().calendarEnabled) return;
-    if (SharedPreferencesUtil().calendarType != 'auto') return;
-
-    List<Event> events = memory.structured.events;
-    if (events.isEmpty) return;
-
-    List<int> indexes = events.mapIndexed((index, e) => index).toList();
-    setMemoryEventsState(memory.id, indexes, indexes.map((_) => true).toList());
-    for (var i = 0; i < events.length; i++) {
-      if (events[i].created) continue;
-      events[i].created = true;
-      CalendarUtil().createEvent(
-        events[i].title,
-        events[i].startsAt,
-        events[i].duration,
-        description: events[i].description,
-      );
-    }
-  }
+  // _handleCalendarCreation(ServerMemory memory) {
+  //   if (!SharedPreferencesUtil().calendarEnabled) return;
+  //   if (SharedPreferencesUtil().calendarType != 'auto') return;
+  //
+  //   List<Event> events = memory.structured.events;
+  //   if (events.isEmpty) return;
+  //
+  //   List<int> indexes = events.mapIndexed((index, e) => index).toList();
+  //   setMemoryEventsState(memory.id, indexes, indexes.map((_) => true).toList());
+  //   for (var i = 0; i < events.length; i++) {
+  //     if (events[i].created) continue;
+  //     events[i].created = true;
+  //     CalendarUtil().createEvent(
+  //       events[i].title,
+  //       events[i].startsAt,
+  //       events[i].duration,
+  //       description: events[i].description,
+  //     );
+  //   }
+  // }
 
   /////////////////////////////////////////////////////////////////
   ////////// Delete Memory With Undo Functionality ///////////////
@@ -329,19 +330,19 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
   @override
   void dispose() {
     _processingMemoryWatchTimer?.cancel();
-    _walService.unsubscribe(this);
+    _wal.unsubscribe(this);
     super.dispose();
   }
 
   @override
-  void onNewMissingWal(Wal wal) async {
-    _missingWals = await _walService.getMissingWals();
+  void onMissingWalUpdated() async {
+    _missingWals = await _wal.getSyncs().getMissingWals();
     notifyListeners();
   }
 
   @override
   void onWalSynced(Wal wal, {ServerMemory? memory}) async {
-    _missingWals = await _walService.getMissingWals();
+    _missingWals = await _wal.getSyncs().getMissingWals();
     notifyListeners();
   }
 
@@ -354,24 +355,47 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
   }
 
   Future syncWals() async {
+    debugPrint("provider > syncWals");
+    setSyncCompleted(false);
     _walsSyncedProgress = 0.0;
     setIsSyncing(true);
-    var res = await _walService.syncAll(progress: this);
+    var res = await _wal.getSyncs().syncAll(progress: this);
     if (res != null) {
       if (res.newMemoryIds.isNotEmpty || res.updatedMemoryIds.isNotEmpty) {
         await getSyncedMemoriesData(res);
       }
     }
-    syncCompleted = true;
+    setSyncCompleted(true);
     setIsSyncing(false);
     notifyListeners();
     return;
   }
 
+  Future syncWal(Wal wal) async {
+    debugPrint("provider > syncWal ${wal.id}");
+    appendMultipleSyncs(true);
+    _walsSyncedProgress = 0.0;
+    var res = await _wal.getSyncs().syncWal(wal: wal, progress: this);
+    if (res != null) {
+      if (res.newMemoryIds.isNotEmpty || res.updatedMemoryIds.isNotEmpty) {
+        print('Synced memories: ${res.newMemoryIds} ${res.updatedMemoryIds}');
+        await getSyncedMemoriesData(res);
+      }
+    }
+    removeMultipleSyncs();
+    notifyListeners();
+    return;
+  }
+
+  void setSyncCompleted(bool value) {
+    syncCompleted = value;
+    notifyListeners();
+  }
+
   Future getSyncedMemoriesData(SyncLocalFilesResponse syncResult) async {
     List<dynamic> newMemories = syncResult.newMemoryIds;
     List<dynamic> updatedMemories = syncResult.updatedMemoryIds;
-
+    setIsFetchingMemories(true);
     List<Future<ServerMemory?>> newMemoriesFutures = newMemories.map((item) => getMemoryDetails(item)).toList();
 
     List<Future<ServerMemory?>> updatedMemoriesFutures = updatedMemories.map((item) => getMemoryDetails(item)).toList();
@@ -383,8 +407,10 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
       final updatedMemoriesResponses = await Future.wait(updatedMemoriesFutures);
       syncedMemories['updated_memories'] = updatedMemoriesResponses;
       addSyncedMemoriesToGroupedMemories(syncedMemories);
+      setIsFetchingMemories(false);
     } catch (e) {
       print('Error during API calls: $e');
+      setIsFetchingMemories(false);
     }
   }
 
@@ -458,6 +484,32 @@ class MemoryProvider extends ChangeNotifier implements IWalServiceListener, IWal
 
   void setIsSyncing(bool value) {
     isSyncing = value;
+    notifyListeners();
+  }
+
+  void appendMultipleSyncs(bool value) {
+    setIsSyncing(true);
+    multipleSyncs.add(value);
+    notifyListeners();
+  }
+
+  void removeMultipleSyncs() {
+    if (multipleSyncs.isNotEmpty) {
+      multipleSyncs.removeLast();
+    } else {
+      setIsSyncing(false);
+      setSyncCompleted(true);
+    }
+    notifyListeners();
+  }
+
+  void clearMultipleSyncs() {
+    multipleSyncs.clear();
+    notifyListeners();
+  }
+
+  void setIsFetchingMemories(bool value) {
+    isFetchingMemories = value;
     notifyListeners();
   }
 }
